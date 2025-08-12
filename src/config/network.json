@@ -1,0 +1,6 @@
+{
+  "name": "Pharos Testnet",
+  "chainId": 688688,
+  "rpcUrl": "https://testnet.dplabs-internal.com",
+  "explorerBase": "https://testnet.pharosscan.xyz"
+}
