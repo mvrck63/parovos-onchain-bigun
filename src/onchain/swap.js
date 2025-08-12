@@ -44,15 +44,16 @@ export async function swapExactIn(wallet, { fromSym, toSym, amount, fee = 500 })
   const types = [
     'address','address','uint24','address','uint256','uint256','uint256','uint160'
   ];
+  const deadline = Math.floor(Date.now() / 1000) + 300;
   const values = [
     tokenIn,          // tokenIn
     tokenOut,         // tokenOut
     fee,              // fee tier
     wallet.address,   // recipient
+    deadline,         // deadline
     amountIn,         // amountIn
     0,                // amountOutMinimum (0 = без ліміту, для тестнету ок)
-    0,                // sqrtPriceLimitX96
-    0
+    0                 // sqrtPriceLimitX96
   ];
   const encodedParams = ethers.AbiCoder.defaultAbiCoder()
     .encode([`tuple(${types.join(',')})`], [values]);
@@ -61,8 +62,6 @@ export async function swapExactIn(wallet, { fromSym, toSym, amount, fee = 500 })
 
   // 4) multicall
   const router = new ethers.Contract(contracts.routerMulticall, multicallAbi, wallet);
-  const deadline = Math.floor(Date.now() / 1000) + 300;
-
   const est = await router.multicall.estimateGas(deadline, [callData]);
   const opts = await eip1559Opts(provider, (est * 12n) / 10n);
 
