@@ -1,15 +1,16 @@
 {
   "tokens": {
-    "USDC": "0xad902cf99c2de2f1ba5ec4d642fd7e49cae9ee37",
     "WPHRS": "0x76aaada469d23216be5f7c596fa25f282ff9b364",
-    "USDT": "0xed59de2d7ad9c043442e381231ee3646fc3c2939"
+    "USD_coin": "0x72df0bcd7276f2dfbac900d1ce63c272c4bccced",
+    "tether_usd": "0xd4071393f8716661958f766df660033b3d35fd29"
   },
   "decimals": {
     "WPHRS": 18,
-    "USDC": 6,
-    "USDT": 6
+    "USD_coin": 6,
+    "tether_usd": 6
   },
   "routerMulticall": "0x1a4de519154ae51200b0ad7c90f7fac75547888a",
+  "routerMulticall2": "0x3541423f25a1ca5c98fdbcf478405d3f0aad1164",
   "positionManager": "0xF8a1D4FF0f9b9Af7CE58E1fc1833688F3BFd6115",
   "pools": {
     "USDC_WPHRS": "0x0373a059321219745aee4fad8a942cf088be3d0e",

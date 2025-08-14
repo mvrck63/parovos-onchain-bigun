@@ -1,0 +1,38 @@
+# Node
+node_modules/
+dist/
+build/
+out/
+.tmp/
+temp/
+.cache/
+.parcel-cache/
+.eslintcache
+*.tsbuildinfo
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS / Editors
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+.history/
+*.swp
+
+
+# Private data for this project
+wallets.txt
+src/wallet-stats.json
+src/wallet-balances.json
+
+# Coverage
+coverage/
+.nyc_output/

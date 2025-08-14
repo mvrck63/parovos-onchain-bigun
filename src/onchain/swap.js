@@ -1,5 +1,5 @@
 import { ethers } from 'ethers';
-import contracts from '../config/contracts.json' assert { type: 'json' };
+import contracts from '../config/contracts.json' with { type: 'json' };
 import { eip1559Opts, parseAmount } from './utils.js';
 
 const erc20 = [
@@ -15,32 +15,34 @@ const multicallAbi = [
 // селектор exactInputSingle
 const EXACT_INPUT_SINGLE_SELECTOR = '0x04e45aaf';
 
-export async function swapExactIn(wallet, { fromSym, toSym, amount, fee = 500 }) {
+// swapExactIn з можливістю явно задати routerAddress
+export async function swapExactIn(wallet, { fromSym, toSym, amount, fee = 500, routerAddress }) {
   const provider = wallet.provider;
 
-  const tokenIn = contracts.tokens[fromSym];
+  const tokenIn  = contracts.tokens[fromSym];
   const tokenOut = contracts.tokens[toSym];
   if (!tokenIn || !tokenOut) throw new Error('Bad token symbols');
 
-  const decIn = contracts.decimals[fromSym];
+  const decIn = (contracts.decimals && contracts.decimals[fromSym]) ?? 18;
   const amountIn = parseAmount(amount, decIn);
 
-  // 1) баланс
+  // 1) approve на конкретний роутер
+  const routerAddr = routerAddress || contracts.routerMulticall;
+  if (!routerAddr) throw new Error('No router address configured');
+
   const tIn = new ethers.Contract(tokenIn, erc20, wallet);
   const bal = await tIn.balanceOf(wallet.address);
   if (bal < amountIn) throw new Error(`Insufficient ${fromSym} balance`);
 
-  // 2) approve на роутер
-  const spender = contracts.routerMulticall;
-  const current = await tIn.allowance(wallet.address, spender);
+  const current = await tIn.allowance(wallet.address, routerAddr);
   if (current < amountIn) {
-    const estA = await tIn.approve.estimateGas(spender, ethers.MaxUint256);
+    const estA = await tIn.approve.estimateGas(routerAddr, ethers.MaxUint256);
     const optsA = await eip1559Opts(provider, (estA * 12n) / 10n);
-    const txA = await tIn.approve(spender, ethers.MaxUint256, optsA);
+    const txA = await tIn.approve(routerAddr, ethers.MaxUint256, optsA);
     await provider.waitForTransaction(txA.hash);
   }
 
-  // 3) exactInputSingle params (tuple)
+  // 2) exactInputSingle params (tuple)
   const types = [
     'address','address','uint24','address','uint256','uint256','uint256','uint160'
   ];
@@ -50,17 +52,18 @@ export async function swapExactIn(wallet, { fromSym, toSym, amount, fee = 500 })
     fee,              // fee tier
     wallet.address,   // recipient
     amountIn,         // amountIn
-    0,                // amountOutMinimum (0 = без ліміту, для тестнету ок)
-    0,                // sqrtPriceLimitX96
+    0,                // amountOutMinimum (0 — ок для тестнету)
+    0,                // sqrtPriceLimitX96 (0 = без ліміту)
     0
   ];
+
   const encodedParams = ethers.AbiCoder.defaultAbiCoder()
     .encode([`tuple(${types.join(',')})`], [values]);
 
   const callData = ethers.concat([EXACT_INPUT_SINGLE_SELECTOR, encodedParams]);
 
-  // 4) multicall
-  const router = new ethers.Contract(contracts.routerMulticall, multicallAbi, wallet);
+  // 3) multicall через вибраний роутер
+  const router = new ethers.Contract(routerAddr, multicallAbi, wallet);
   const deadline = Math.floor(Date.now() / 1000) + 300;
 
   const est = await router.multicall.estimateGas(deadline, [callData]);
