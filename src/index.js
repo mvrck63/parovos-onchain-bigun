@@ -11,7 +11,7 @@ import {
   // recordLiquidityAdd, recordTransfer
 } from './storage/stats.js';
 
-/* ───────── LOGGERS with Kyiv timestamp ───────── */
+/* ───────── LOGGERS with Kyiv timestamp ──────── */
 function mkLogger(prefix = '') {
   const p = prefix ? `[${prefix}] ` : '';
   const tz = 'Europe/Kyiv';
