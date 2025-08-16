@@ -252,17 +252,53 @@ function pickSwapAmount(pair, balances) {
 /* =========================
    ГЛОБАЛЬНИЙ GAP МІЖ TX
 ========================= */
+// helper для експоненційного розподілу (Пуассонівський процес інтервалів)
+function randExp(meanSec) {
+  const u = Math.random();
+  return -Math.log(1 - u) * meanSec; // секунди
+}
+
 let nextAllowedAt = 0;
+
+/**
+ * Глобальний мінімальний інтервал + персональний джиттер воркера.
+ * - Глобальна частина гарантує, що транзакції не ліпляться близько.
+ * - Персональний джиттер робить час очікування різним у кожного воркера.
+ */
 async function waitGlobalGap(L) {
   const now = Date.now();
-  if (now < nextAllowedAt) {
-    const waitMs = nextAllowedAt - now;
-    L.info(`Global gap: waiting ${Math.ceil(waitMs / 1000)}s before next tx`);
-    await sleep(waitMs);
+
+  // скільки ще треба дочекатися до глобальної “наступної мітки”
+  const baseWaitMs = Math.max(0, nextAllowedAt - now);
+
+  // персональний додатковий джиттер
+  const extraMin = Number(process.env.EXTRA_GAP_MIN_SEC ?? 10);
+  const extraMax = Number(process.env.EXTRA_GAP_MAX_SEC ?? 45);
+  const extraSec = randInt(extraMin, extraMax);
+  const extraMs = extraSec * 1000 + randInt(0, 750); // +трохи мілісекунд для більшої «солі»
+
+  const totalWaitMs = baseWaitMs + extraMs;
+
+  if (totalWaitMs > 0) {
+    const totalSec = Math.ceil(totalWaitMs / 1000);
+    L.info(`Global gap: waiting ${totalSec}s before next tx`);
+    await sleep(totalWaitMs);
   }
-  const gapSec = randInt(GLOBAL_GAP_MIN_SEC, GLOBAL_GAP_MAX_SEC);
-  nextAllowedAt = Date.now() + gapSec * 1000;
+
+  // після виконання — ставимо НОВУ глобальну “наступну мітку”
+  const mode = (process.env.GLOBAL_GAP_MODE || 'uniform').toLowerCase();
+  if (mode === 'poisson') {
+    const mean = Number(process.env.GLOBAL_GAP_MEAN_SEC ?? 75);
+    const gapSec = Math.max(5, Math.round(randExp(mean))); // не менше 5с
+    nextAllowedAt = Date.now() + gapSec * 1000;
+  } else {
+    const min = Number(process.env.GLOBAL_GAP_MIN_SEC ?? 60);
+    const max = Number(process.env.GLOBAL_GAP_MAX_SEC ?? 120);
+    const gapSec = randInt(min, max);
+    nextAllowedAt = Date.now() + gapSec * 1000;
+  }
 }
+
 
 /* =========================
    БАН DEX ДЛЯ ПАР
