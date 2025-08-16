@@ -27,7 +27,7 @@ import {
 } from './storage/stats.js';
 
 /* =========================
-   КОЛЬОРОВІ ЛОГИ + ЧАС
+   КОЛЬОРИ + ЧАСОВА ПОЗНАЧКА
 ========================= */
 const COLOR = {
   reset:  '\x1b[0m',
@@ -149,6 +149,7 @@ function buildSwapPairs() {
       pairs.push({ fromSym: b, toSym: a });
     }
   }
+  // прямий PHRS<->WPHRS ми *не* додаємо сюди принципово
   return pairs;
 }
 const SWAP_PAIRS = buildSwapPairs();
@@ -270,33 +271,34 @@ const PAIR_DEX_BAN = new Map(); // key: "A->B", value: Set('Zenith'|'Faroswap'|r
 const pairKey = (p) => `${p.fromSym}->${p.toSym}`;
 
 /* =========================
-   СТАРТОВЕ МЕНЮ (РЕЖИМ)
+   РЕЖИМ РОБОТИ (1/2)
 ========================= */
-let ALLOW_WRAP = true; // за замовчанням
+let MODE = 1;          // 1 = стандартний; 2 = тільки свопи зі стейблами (без прямого PHRS<->WPHRS)
+let ALLOW_WRAP = true; // wrap/unwrap дозволені під капотом для PHRS↔стейбл
+
 async function selectMode() {
-  // ENV-перевага, якщо задано
   const envMode = (process.env.MODE || '').trim();
   if (envMode === '1' || envMode === '2') {
-    ALLOW_WRAP = envMode !== '2';
-    return;
+    MODE = Number(envMode);
+  } else if (process.stdin.isTTY) {
+    const rl = readline.createInterface({ input, output });
+    console.log('');
+    console.log(paint(COLOR.cyan, '=== Оберіть режим запуску ==='));
+    console.log(paint(COLOR.cyan, '1) Стандартний (wrap+swap, swap+unwrap, усі свопи)'));
+    console.log(paint(COLOR.cyan, '2) Лише свопи зі стейблами (PHRS↔стейбл, WPHRS↔стейбл, стейбл↔стейбл; БЕЗ PHRS↔WPHRS)'));
+    const ans = (await rl.question(paint(COLOR.yellow, 'Введіть 1 або 2: '))).trim();
+    rl.close();
+    MODE = (ans === '2') ? 2 : 1;
+  } else {
+    MODE = 1;
   }
 
-  if (!process.stdin.isTTY) {
-    // Якщо немає TTY (наприклад, запуск у CI) — стандартний режим
-    ALLOW_WRAP = true;
-    return;
-  }
+  ALLOW_WRAP = true; // під капотом для PHRS↔стейбл завжди можна
 
-  const rl = readline.createInterface({ input, output });
-  console.log('');
-  console.log(paint(COLOR.cyan, '=== Оберіть режим запуску ==='));
-  console.log(paint(COLOR.cyan, '1) Стандартний (wrap+swap, swap+unwrap, усі свопи)'));
-  console.log(paint(COLOR.cyan, '2) Лише свопи (без wrap/unwrap; дозволено WPHRS↔стейбли та стейбл↔стейбл)'));
-  const ans = (await rl.question(paint(COLOR.yellow, 'Введіть 1 або 2: '))).trim();
-  rl.close();
-
-  ALLOW_WRAP = ans !== '2';
-  console.log(paint(COLOR.cyan, `[${fmtTime()}] [i] Режим: ${ALLOW_WRAP ? 'Стандартний' : 'Лише свопи (без wrap/unwrap)'}`));
+  const modeLabel = MODE === 1
+    ? 'Стандартний'
+    : 'Лише свопи зі стейблами (без прямого PHRS↔WPHRS)';
+  console.log(paint(COLOR.cyan, `[${fmtTime()}] [i] Режим: ${modeLabel}`));
 }
 
 /* =========================
@@ -356,10 +358,12 @@ async function swapWithPreference(L, wallet, pair, amount, preferDexKey) {
    UNIFIED SWAP (усі сценарії)
 ========================= */
 async function unifiedSwap(L, wallet, privateKey, balances, preferDexName) {
-  // кандидати з балансом + фільтр за режимом
+  // кандидати з балансом + фільтр: режим 2 забороняє лише прямий PHRS↔WPHRS
   const candidates = SWAP_PAIRS.filter((p) => {
-    // якщо wrap заборонено — відкидаємо будь-які пари з PHRS
-    if (!ALLOW_WRAP && (p.fromSym === 'PHRS' || p.toSym === 'PHRS')) return false;
+    if ((p.fromSym === 'PHRS' && p.toSym === 'WPHRS') ||
+        (p.fromSym === 'WPHRS' && p.toSym === 'PHRS')) {
+      return false; // заборонено в обох режимах (ми так задумали)
+    }
 
     const dec = getDec(p.fromSym === 'PHRS' ? 'WPHRS' : p.fromSym);
     const balUnits = fmtUnits(balances[p.fromSym] ?? 0n, dec);
@@ -379,17 +383,21 @@ async function unifiedSwap(L, wallet, privateKey, balances, preferDexName) {
     return false;
   }
 
-  // PHRS → стейбл: wrap + swap(WPHRS→стейбл)
-  if (ALLOW_WRAP && pair.fromSym === 'PHRS' && STABLES.has(pair.toSym)) {
+  // PHRS → стейбл (wrap під капотом)
+  if (pair.fromSym === 'PHRS' && STABLES.has(pair.toSym)) {
     const need = ethers.parseEther(String(amount));
     if ((balances.PHRS ?? 0n) < need) {
       L.warn(`Skip PHRS→${pair.toSym}: insufficient PHRS`);
       return false;
     }
-    L.info(`Wrap+Swap ${amount} PHRS → ${pair.toSym} (pref=${preferDexName || 'auto'})`);
-    await waitGlobalGap(L);
-    const recW = await wrapPHRS(wallet, amount);
-    L.ok(`Wrap tx: ${EXPLORER}/tx/${recW.hash}`);
+    const head = (MODE === 2 ? 'Swap' : 'Wrap+Swap');
+    L.info(`${head} ${amount} PHRS → ${pair.toSym} (pref=${preferDexName || 'auto'})`);
+
+    if (MODE !== 2) { // у режимі 2 можна приховати wrap у логах; але транзакція все одно відбудеться на роутері
+      await waitGlobalGap(L);
+      const recW = await wrapPHRS(wallet, amount);
+      L.ok(`Wrap tx: ${EXPLORER}/tx/${recW.hash}`);
+    }
 
     const { ok, dexKey } = await swapWithPreference(
       L, wallet,
@@ -400,19 +408,21 @@ async function unifiedSwap(L, wallet, privateKey, balances, preferDexName) {
     if (!ok) return false;
 
     await recordSwap(privateKey, dexKey || '');
-    L.info(`Wrap+Swap completed via ${dexKey || 'Unknown'}`);
+    L.info(`${head} completed via ${dexKey || 'Unknown'}`);
     return true;
   }
 
-  // стейбл → PHRS: swap(стейбл→WPHRS) + unwrap
-  if (ALLOW_WRAP && STABLES.has(pair.fromSym) && pair.toSym === 'PHRS') {
+  // стейбл → PHRS (unwrap під капотом)
+  if (STABLES.has(pair.fromSym) && pair.toSym === 'PHRS') {
     const decIn = getDec(pair.fromSym);
     const need = ethers.parseUnits(String(amount), decIn);
     if ((balances[pair.fromSym] ?? 0n) < need) {
       L.warn(`Skip ${pair.fromSym}→PHRS: insufficient ${pair.fromSym}`);
       return false;
     }
-    L.info(`Swap+Unwrap ${amount} ${pair.fromSym} → PHRS (pref=${preferDexName || 'auto'})`);
+    const head = (MODE === 2 ? 'Swap' : 'Swap+Unwrap');
+    L.info(`${head} ${amount} ${pair.fromSym} → PHRS (pref=${preferDexName || 'auto'})`);
+
     const w = new ethers.Contract(contracts.tokens.WPHRS, ['function balanceOf(address) view returns (uint256)'], wallet);
     const before = await withRpcRetry('WPHRS.balanceOf(before)', () => w.balanceOf(wallet.address));
 
@@ -427,7 +437,7 @@ async function unifiedSwap(L, wallet, privateKey, balances, preferDexName) {
 
     const after = await withRpcRetry('WPHRS.balanceOf(after)', () => w.balanceOf(wallet.address));
     const delta = after - before;
-    if (delta > 0n) {
+    if (delta > 0n && MODE !== 2) {
       const outAmt = Number(ethers.formatUnits(delta, 18));
       await waitGlobalGap(L);
       const recU = await unwrapPHRS(wallet, outAmt);
@@ -436,7 +446,7 @@ async function unifiedSwap(L, wallet, privateKey, balances, preferDexName) {
     return true;
   }
 
-  // інші напрями (WPHRS↔стейбл, стейбл↔стейбл)
+  // інші напрями: WPHRS↔стейбл, стейбл↔стейбл
   {
     const { ok, dexKey } = await swapWithPreference(L, wallet, pair, amount, preferDexName);
     if (ok) await recordSwap(privateKey, dexKey || '');
@@ -577,8 +587,7 @@ async function runWaves(allKeys) {
 ========================= */
 (async () => {
   try {
-    // вибір режиму (інтерактивно або через ENV MODE=1|2)
-    await selectMode();
+    await selectMode(); // вибір режиму 1/2
 
     const statsPath = process.env.STATS_FILE || './src/wallet-stats.json';
     G.info(`STATS_FILE: ${statsPath}`);
